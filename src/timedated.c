@@ -30,6 +30,10 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 
+#if HAVE_OPENRC
+#include <rc.h>
+#endif
+
 #include "copypaste/hwclock.h"
 #include "timedated.h"
 #include "timedate1-generated.h"
@@ -55,8 +59,8 @@ G_LOCK_DEFINE_STATIC (clock);
 
 gboolean use_ntp = FALSE;
 static const gchar *ntp_preferred_service = NULL;
-static const gchar *ntp_default_services[] = { "ntpd", NULL };
-#define NTP_DEFAULT_SERVICES_PACKAGES "ntp"
+static const gchar *ntp_default_services[] = { "ntpd", "chronyd", "busybox-ntpd", NULL };
+#define NTP_DEFAULT_SERVICES_PACKAGES "ntp, openntpd, chrony, busybox-ntpd"
 G_LOCK_DEFINE_STATIC (ntp);
 
 static gboolean
@@ -170,18 +174,160 @@ set_timezone (const gchar *identifier,
 /* Return the ntp rc service we will use; return value should NOT be freed */
 static const gchar *
 ntp_service ()
+{
+#if HAVE_OPENRC
+    const gchar * const *s = NULL;
+    const gchar *service = NULL;
+    gchar *runlevel = NULL;
+
+    if (ntp_preferred_service != NULL)
+        return ntp_preferred_service;
+
+    runlevel = rc_runlevel_get();
+    for (s = ntp_default_services; *s != NULL; s++) {
+        if (!rc_service_exists (*s))
+            continue;
+        if (service == NULL)
+            service = *s;
+        if (rc_service_in_runlevel (*s, runlevel)) {
+            service = *s;
+            break;
+        }
+    }
+    free (runlevel);
+
+    return service;
+#else
+    return NULL;
+#endif
+}
 
 static gboolean
 service_started (const gchar *service,
                  GError **error)
+{
+#if HAVE_OPENRC
+    RC_SERVICE state;
+
+    g_assert (service != NULL);
+
+    if (!rc_service_exists (service)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
+        return FALSE;
+    }
+
+    state = rc_service_state (service);
+    return state == RC_SERVICE_STARTED || state == RC_SERVICE_STARTING || state == RC_SERVICE_INACTIVE;
+#else
+    return FALSE;
+#endif
+}
 
 static gboolean
 service_disable (const gchar *service,
                  GError **error)
+{
+#if HAVE_OPENRC
+    gchar *runlevel = NULL;
+    gchar *service_script = NULL;
+    const gchar *argv[3] = { NULL, "stop", NULL };
+    gboolean ret = FALSE;
+    gint exit_status = 0;
+
+    g_assert (service != NULL);
+
+    if (!rc_service_exists (service)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
+        goto out;
+    }
+
+    runlevel = rc_runlevel_get();
+    if (rc_service_in_runlevel (service, runlevel)) {
+        g_debug ("Removing %s rc service from %s runlevel", service, runlevel);
+        if (!rc_service_delete (runlevel, service))
+            g_warning ("Failed to remove %s rc service from %s runlevel", service, runlevel);
+    }
+
+    if ((service_script = rc_service_resolve (service)) == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service does not resolve", service);
+        goto out;
+    }
+
+    g_debug ("Stopping %s rc service", service);
+    argv[0] = service_script;
+    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, 0, NULL, NULL, NULL, NULL, &exit_status, error)) {
+        g_prefix_error (error, "Failed to spawn %s rc service:", service);
+        goto out;
+    }
+    if (exit_status) {
+        g_set_error (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED, "%s rc service failed to stop with exit status %d", service, exit_status);
+        goto out;
+    }
+    ret = TRUE;
+
+  out:
+    if (runlevel != NULL)
+        free (runlevel);
+    if (service_script != NULL)
+        free (service_script);
+    return ret;
+#else
+    return FALSE;
+#endif
+}
 
 static gboolean
 service_enable (const gchar *service,
                 GError **error)
+{
+#if HAVE_OPENRC
+    gchar *runlevel = NULL;
+    gchar *service_script = NULL;
+    const gchar *argv[3] = { NULL, "start", NULL };
+    gboolean ret = FALSE;
+    gint exit_status = 0;
+
+    g_assert (service != NULL);
+
+    if (!rc_service_exists (service)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
+        goto out;
+    }
+
+    runlevel = rc_runlevel_get();
+    if (!rc_service_in_runlevel (service, runlevel)) {
+        g_debug ("Adding %s rc service to %s runlevel", service, runlevel);
+        if (!rc_service_add (runlevel, service))
+            g_warning ("Failed to add %s rc service to %s runlevel", service, runlevel);
+    }
+
+    if ((service_script = rc_service_resolve (service)) == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service does not resolve", service);
+        goto out;
+    }
+
+    g_debug ("Starting %s rc service", service);
+    argv[0] = service_script;
+    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, 0, NULL, NULL, NULL, NULL, &exit_status, error)) {
+        g_prefix_error (error, "Failed to spawn %s rc service:", service);
+        goto out;
+    }
+    if (exit_status) {
+        g_set_error (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED, "%s rc service failed to start with exit status %d", service, exit_status);
+        goto out;
+    }
+    ret = TRUE;
+
+  out:
+    if (runlevel != NULL)
+        free (runlevel);
+    if (service_script != NULL)
+        free (service_script);
+    return ret;
+#else
+    return FALSE;
+#endif
+}
 
 struct invoked_set_time {
     GDBusMethodInvocation *invocation;
@@ -231,7 +377,7 @@ on_handle_set_time_authorized_cb (GObject *source_object,
         tm = gmtime(&ts.tv_sec);
     hwclock_set_time(tm);
 
-    openrc_settingsd_timedated_timedate1_complete_set_time (timedate1, data->invocation);
+    timedated_timedate1_complete_set_time (timedate1, data->invocation);
 
   unlock:
     G_UNLOCK (clock);
@@ -551,7 +697,7 @@ on_bus_acquired (GDBusConnection *connection,
                                            &err)) {
         if (err != NULL) {
             g_critical ("Failed to export interface on /org/freedesktop/timedate1: %s", err->message);
-            openrc_settingsd_exit (1);
+            exit (1);
         }
     }
 }
@@ -586,7 +732,7 @@ timedated_init (gboolean _read_only,
     read_only = _read_only;
     ntp_preferred_service = _ntp_preferred_service;
 
-    hwclock_file = g_file_new_for_path (SYSCONFDIR "/hwclock");
+    hwclock_file = g_file_new_for_path (SYSCONFDIR "/conf.d/hwclock");
     timezone_file = g_file_new_for_path (SYSCONFDIR "/timezone");
     localtime_file = g_file_new_for_path (SYSCONFDIR "/localtime");
 
