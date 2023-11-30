@@ -2,7 +2,7 @@
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 
 <policyconfig>
-    <vendor>openrc-settingsd</vendor>
+    <vendor>timedated</vendor>
 
     <action id="org.freedesktop.timedate1.set-time">
         <description>Set system time</description>
