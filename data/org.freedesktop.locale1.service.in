@@ -1,4 +1,4 @@
 [D-BUS Service]
-Name=org.freedesktop.locale1
-Exec=@libexecdir@/blocaled
+Name=org.freedesktop.timedate1
+Exec=@libexecdir@/timedated
 User=root
