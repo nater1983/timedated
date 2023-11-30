@@ -6,9 +6,9 @@ AUTOMAKE_OPTIONS = subdir-objects
 SUBDIRS = . tests
 
 EXTRA_DIST = \
-        data/blocaled.8.in \
-        data/blocaled.conf.in \
-	data/org.freedesktop.locale1.service.in \
+        data/timedated.8.in \
+        data/timedated.conf.in \
+	data/org.freedesktop.timedate1.service.in \
 	AUTHORS \
 	COPYING \
 	README \
@@ -17,29 +17,28 @@ EXTRA_DIST = \
 	$(NULL)
 
 dist_pkgdata_DATA = \
-	data/kbd-model-map \
 	$(NULL)
 
-sysconf_DATA = data/blocaled.conf
+sysconf_DATA = data/timedated.conf
 
 dbusinterfacesdir = @dbusinterfacesdir@
 dist_dbusinterfaces_DATA = \
-	data/org.freedesktop.locale1.xml \
+	data/org.freedesktop.timedate1.xml \
 	$(NULL)
 
 dbusservicesdir = @dbussystemservicesdir@
 dbusservices_DATA = \
-	data/org.freedesktop.locale1.service \
+	data/org.freedesktop.timedate1.service \
 	$(NULL)
 
 dbusbusconfigdir = $(sysconfdir)/dbus-1/system.d
 dist_dbusbusconfig_DATA = \
-	data/org.freedesktop.locale1.conf \
+	data/org.freedesktop.timedate1.conf \
 	$(NULL)
 
 polkitactiondir = @polkitactiondir@
 dist_polkitaction_DATA = \
-	data/org.freedesktop.locale1.policy \
+	data/org.freedesktop.timedate1.policy \
 	$(NULL)
 
 pidfile = @pidfile@
@@ -51,7 +50,7 @@ do_subst = $(SED) -e 's,[@]libexecdir[@],$(libexecdir),g' \
 #	$(do_subst) < $(srcdir)/$< > $(builddir)/$@
 	$(do_subst) < $< > $@
 
-man_MANS = data/blocaled.8
+man_MANS = data/timedated.8
 
 AM_CPPFLAGS = \
 	-include $(top_builddir)/config.h \
@@ -60,26 +59,24 @@ AM_CPPFLAGS = \
 	-DLIBEXECDIR=\""$(libexecdir)"\" \
 	-DPKGDATADIR=\""$(pkgdatadir)"\" \
 	-DPIDFILE=\""$(pidfile)"\" \
-	-DLOCALECONFIG=\""$(localeconfig)"\" \
-	-DKEYBOARDCONFIG=\""$(keyboardconfig)"\" \
-	-DXKBDCONFIG=\""$(xkbdconfig)"\" \
-	$(BLOCALED_CFLAGS) \
+	-DTIMEDATECONFIG=\""$(timedateconfig)"\" \
+	$(TIMEDATED_CFLAGS) \
 	-I$(top_srcdir)/src \
 	-I$(top_builddir)/src \
 	$(NULL)
 
-LDADD = $(BLOCALED_LIBS)
+LDADD = $(TIMEDATED_LIBS)
 
-libexec_PROGRAMS = blocaled
+libexec_PROGRAMS = timedated
 
-localed_built_sources = \
-	src/locale1-generated.c \
-	src/locale1-generated.h \
+timedated_built_sources = \
+	src/timedate1-generated.c \
+	src/timedate1-generated.h \
 	$(NULL)
 
-blocaled_SOURCES = \
-	src/localed.c \
-	src/localed.h \
+timedated_SOURCES = \
+	src/timedated.c \
+	src/timedated.h \
 	src/shellparser.c \
 	src/shellparser.h \
 	src/polkitasync.c \
@@ -88,24 +85,24 @@ blocaled_SOURCES = \
 	src/main.c \
 	$(NULL)
 
-nodist_blocaled_SOURCES = \
-	$(localed_built_sources) \
+nodist_timedated_SOURCES = \
+	$(timedated_built_sources) \
 	$(NULL)
 
-$(localed_built_sources) : data/org.freedesktop.locale1.xml
+$(localed_built_sources) : data/org.freedesktop.timedate1.xml
 	$(AM_V_GEN)( pushd "$(builddir)/src" > /dev/null; \
 	$(GDBUS_CODEGEN) \
 	--interface-prefix org.freedesktop. \
-	--c-namespace BLocaled \
-	--generate-c-code locale1-generated \
-	$(abs_srcdir)/data/org.freedesktop.locale1.xml; \
+	--c-namespace Timedated \
+	--generate-c-code timedate1-generated \
+	$(abs_srcdir)/data/org.freedesktop.timedate1.xml; \
 	popd > /dev/null )
 
 BUILT_SOURCES = \
-	$(localed_built_sources) \
+	$(timedated_built_sources) \
 	$(NULL)
 
 CLEANFILES = \
-	$(localed_built_sources) \
+	$(timedated_built_sources) \
 	$(dbusservices_DATA) \
 	$(NULL)
