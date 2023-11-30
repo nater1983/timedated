@@ -312,10 +312,7 @@ main (gint argc, gchar *argv[])
                                    on_signal,
                                    NULL);
     timedated_init (read_only,
-		  kbd_model_map,
-		  localeconfig,
-		  keyboardconfig,
-		  xkbdconfig);
+		  timedateconfig,
     g_main_loop_run (loop);
 
     g_main_loop_unref (loop);
