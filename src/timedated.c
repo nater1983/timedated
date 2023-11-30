@@ -427,7 +427,7 @@ main (int argc, char *argv[])
     gint ret = EXIT_FAILURE;
 
     context = g_option_context_new ("- timedated");
-    g_option_context_add_group (context, g_irepository_get_option_group (timedate1_get_type ()));
+    g_option_context_add_group (context, g_irepository_get_option_group (g_date_get_type ()));
     if (!g_option_context_parse (context, &argc, &argv, &error)) {
         g_printerr ("Error parsing command line arguments: %s\n", error->message);
         return EXIT_FAILURE;
