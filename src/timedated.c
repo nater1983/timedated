@@ -30,10 +30,6 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 
-#if HAVE_OPENRC
-#include <rc.h>
-#endif
-
 #include "copypaste/hwclock.h"
 #include "timedated.h"
 #include "timedate1-generated.h"
