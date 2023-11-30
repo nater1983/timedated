@@ -89,7 +89,7 @@ nodist_timedated_SOURCES = \
 	$(timedated_built_sources) \
 	$(NULL)
 
-$(localed_built_sources) : data/org.freedesktop.timedate1.xml
+$(timedated_built_sources) : data/org.freedesktop.timedate1.xml
 	$(AM_V_GEN)( pushd "$(builddir)/src" > /dev/null; \
 	$(GDBUS_CODEGEN) \
 	--interface-prefix org.freedesktop. \
