@@ -243,7 +243,7 @@ on_handle_set_time_authorized_cb (GObject *source_object,
 }
 
 static gboolean
-on_handle_set_time (OpenrcSettingsdTimedatedTimedate1 *timedate1,
+on_handle_set_time (TimedatedTimedate1 *timedate1,
                     GDBusMethodInvocation *invocation,
                     const gint64 usec_utc,
                     const gboolean relative,
@@ -302,10 +302,10 @@ on_handle_set_timezone_authorized_cb (GObject *source_object,
         hwclock_set_time (tm);
     }
 
-    openrc_settingsd_timedated_timedate1_complete_set_timezone (timedate1, data->invocation);
+    timedated_timedate1_complete_set_timezone (timedate1, data->invocation);
     g_free (timezone_name);
     timezone_name = data->timezone;
-    openrc_settingsd_timedated_timedate1_set_timezone (timedate1, timezone_name);
+    timedated_timedate1_set_timezone (timedate1, timezone_name);
 
   unlock:
     G_UNLOCK (clock);
@@ -317,7 +317,7 @@ on_handle_set_timezone_authorized_cb (GObject *source_object,
 }
 
 static gboolean
-on_handle_set_timezone (OpenrcSettingsdTimedatedTimedate1 *timedate1,
+on_handle_set_timezone (TimedatedTimedate1 *timedate1,
                         GDBusMethodInvocation *invocation,
                         const gchar *timezone,
                         const gboolean user_interaction,
