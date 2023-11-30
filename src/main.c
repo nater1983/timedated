@@ -212,9 +212,7 @@ timedated_started ()
  * via D-Bus activation.
  */
 
-gint
-main (gint argc, gchar *argv[])
-{
+int main(int argc, char *argv[]) {
     GError *error = NULL;
     GOptionContext *option_context;
     pid_t pid;
@@ -226,108 +224,100 @@ main (gint argc, gchar *argv[])
 
     GKeyFile *key_file = g_key_file_new();
 
-    g_log_set_default_handler (log_handler, NULL);
+    g_log_set_default_handler(log_handler, NULL);
 
-    option_context = g_option_context_new ("- timedate settings D-Bus service");
-    g_option_context_add_main_entries (option_context, option_entries, NULL);
-    if (!g_option_context_parse (option_context, &argc, &argv, &error)) {
-        g_critical ("Failed to parse options: %s", error->message);
+    option_context = g_option_context_new("- timedate settings D-Bus service");
+    g_option_context_add_main_entries(option_context, option_entries, NULL);
+    if (!g_option_context_parse(option_context, &argc, &argv, &error)) {
+        g_critical("Failed to parse options: %s", error->message);
         return 1;
     }
 
     if (print_version) {
-        g_print ("%s\n", PACKAGE_STRING);
+        g_print("%s\n", PACKAGE_STRING);
         return 0;
     }
 
+    // Assume this is where timedateconfig should be set
     if (config_file == NULL)
         config_file = SYSCONFDIR "/timedated.conf";
-    else if (!g_file_test (config_file,
-                           G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
-        g_critical ("Configuration file not found: %s", config_file);
+    else if (!g_file_test(config_file, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
+        g_critical("Configuration file not found: %s", config_file);
         return 1;
     }
 
     if (!g_key_file_load_from_file(key_file, config_file, G_KEY_FILE_NONE, &error)) {
         if (error->domain != G_FILE_ERROR || error->code != G_FILE_ERROR_NOENT) {
-            g_critical ("Failed to parse configuration: %s", error->message);
+            g_critical("Failed to parse configuration: %s", error->message);
             return 1;
         } else
-            g_clear_error (&error);
+            g_clear_error(&error);
     } else {
-        timedateconfig = g_key_file_get_value (key_file, "settings", "timedatefile", &error);
+        timedateconfig = g_key_file_get_value(key_file, "settings", "timedatefile", &error);
         if (error != NULL)
             if (error->code == G_KEY_FILE_ERROR_GROUP_NOT_FOUND) {
-
-                g_critical ("Failed to parse configuration: %s", error->message);
+                g_critical("Failed to parse configuration: %s", error->message);
                 return 1;
             } else
-                g_clear_error (&error);
-        }
+                g_clear_error(&error);
     }
     if (timedateconfig == NULL) timedateconfig = TIMEDATECONFIG;
 
     if (!foreground) {
-        if (daemon_retval_init () < 0) {
-            g_critical ("Failed to create pipe");
+        if (daemon_retval_init() < 0) {
+            g_critical("Failed to create pipe");
             return 1;
         }
-        if ((pid = daemon_fork ()) < 0) {
+        if ((pid = daemon_fork()) < 0) {
             /* Fork failed */
-            daemon_retval_done ();
+            daemon_retval_done();
             return 1;
         } else if (pid) {
             /* Parent */
             int ret;
 
             /* Wait 20 seconds for daemon_retval_send() in the daemon process */
-            if ((ret = daemon_retval_wait (20)) < 0) {
-                g_critical ("Timed out waiting for daemon process: %s", strerror(errno));
+            if ((ret = daemon_retval_wait(20)) < 0) {
+                g_critical("Timed out waiting for daemon process: %s", strerror(errno));
                 return 255;
             } else if (ret > 0) {
-                g_critical ("Daemon process returned error code %d", ret);
+                g_critical("Daemon process returned error code %d", ret);
                 return ret;
             }
             return 0;
         }
         /* Daemon */
         use_syslog = TRUE;
-        daemon_close_all (-1);
+        daemon_close_all(-1);
     }
-/*
- * If daemonizing, dfork sets umask to 077, and if foreground, we do
- * not know the umask. SO we have to set a sane one now.
- */
-    umask (022);
 
-    shell_parser_init ();
-    /* loop = g_main_loop_new (NULL, FALSE); */
-    sighup_id = g_unix_signal_add (SIGHUP,
-                                   on_signal,
-                                   NULL);
-    sigint_id = g_unix_signal_add (SIGINT,
-                                   on_signal,
-                                   NULL);
-    sigterm_id = g_unix_signal_add (SIGTERM,
-                                   on_signal,
-                                   NULL);
-    timedated_init (read_only,
-		  timedateconfig,
-    g_main_loop_run (loop);
+    // Set a sane umask
+    umask(022);
 
-    g_main_loop_unref (loop);
+    shell_parser_init();
+    // Assume this is where the loop should be initialized
+    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    sighup_id = g_unix_signal_add(SIGHUP, on_signal, NULL);
+    sigint_id = g_unix_signal_add(SIGINT, on_signal, NULL);
+    sigterm_id = g_unix_signal_add(SIGTERM, on_signal, NULL);
 
-    pidfile = g_file_new_for_path (PIDFILE);
-    g_file_delete (pidfile, NULL, NULL);
-    g_clear_object (&pidfile);
+    timedated_init(read_only, timedateconfig);
 
-    g_source_remove (sighup_id);
-    g_source_remove (sigint_id);
-    g_source_remove (sigterm_id);
+    g_main_loop_run(loop);
 
-    timedated_destroy ();
-    shell_parser_destroy ();
+    g_main_loop_unref(loop);
 
-    g_clear_error (&error);
+    pidfile = g_file_new_for_path(PIDFILE);
+    g_file_delete(pidfile, NULL, NULL);
+    g_clear_object(&pidfile);
+
+    g_source_remove(sighup_id);
+    g_source_remove(sigint_id);
+    g_source_remove(sigterm_id);
+
+    timedated_destroy();
+    shell_parser_destroy();
+
+    g_clear_error(&error);
     return exit_status;
 }
