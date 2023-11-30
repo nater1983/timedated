@@ -16,8 +16,8 @@ PKG_CHECK_MODULES(TIMEDATED,
                    dbus-1
                    polkit-gobject-1
                    libdaemon])
-AC_SUBST(BLOCALED_CFLAGS)
-AC_SUBST(BLOCALED_LIBS)
+AC_SUBST(TIMEDATED_CFLAGS)
+AC_SUBST(TIMEDATED_LIBS)
 
 AC_PATH_PROG(GDBUS_CODEGEN, gdbus-codegen)
 if test "x$GDBUS_CODEGEN" = x; then
