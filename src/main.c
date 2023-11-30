@@ -95,7 +95,7 @@ log_handler (const gchar *log_domain,
 
     result = g_string_new (NULL);
     if (!use_syslog)
-        g_string_append_printf (result, "blocaled[%lu]: ", (gulong)getpid ());
+        g_string_append_printf (result, "timedated[%lu]: ", (gulong)getpid ());
     if (log_domain != NULL)
         g_string_append_printf (result, "%s: ", log_domain);
 
@@ -127,7 +127,7 @@ log_handler (const gchar *log_domain,
     result_data = g_string_free (result, FALSE);
 
     if (use_syslog) {
-        openlog ("blocaled", LOG_PID, LOG_DAEMON);
+        openlog ("timedated", LOG_PID, LOG_DAEMON);
         syslog (log_level_to_syslog (log_level), "%s", result_data);
     } else
         g_printerr ("%s\n", result_data);
@@ -152,7 +152,7 @@ on_signal (gpointer user_data)
 }
 
 /**
- * localed_exit:
+ * timedated_exit:
  * @status: exit code
  *
  * Removes the PID file, and exit with code @status
@@ -160,7 +160,7 @@ on_signal (gpointer user_data)
  */
 
 void
-localed_exit (int status)
+timedated_exit (int status)
 {
     if (!foreground)
         daemon_retval_send (status);
@@ -169,13 +169,13 @@ localed_exit (int status)
 }
 
 /**
- * localed_started:
+ * timedated_started:
  *
  * Creates the PID file. If all goes well and daemonized, sends a status=0
  * to the parent
  */
 void
-localed_started ()
+timedated_started ()
 {
     GError *err = NULL;
     GFile *pidfile = g_file_new_for_path (PIDFILE);
@@ -194,9 +194,9 @@ localed_started ()
 }
 
 /**
- * PROGRAM: blocaled
- * @short_description: locale settings D-Bus service
- * @synopsis: blocaled [--debug] [--foreground] [--readonly]
+ * PROGRAM: timedated
+ * @short_description: timedate settings D-Bus service
+ * @synopsis: timedated [--debug] [--foreground] [--readonly]
  * @see_also: dbus-daemon(1), polkit(8)
  * @--help: Show an help message
  * @--version: Show version information
@@ -206,9 +206,9 @@ localed_started ()
  * @--read-only: Run daemon in read-only mode: the settings files are read,
  * but cannot be modified
  *
- * The blocaled daemon implements the standard org.freedesktop.locale1 D-Bus
+ * The timedated daemon implements the standard org.freedesktop.timedate1 D-Bus
  * interface as a standalone daemon. Users and administrators should not
- * need to run the blocaled executable manually. It will be launched on demand
+ * need to run the timedated executable manually. It will be launched on demand
  * via D-Bus activation.
  */
 
@@ -218,10 +218,7 @@ main (gint argc, gchar *argv[])
     GError *error = NULL;
     GOptionContext *option_context;
     pid_t pid;
-    gchar *kbd_model_map = PKGDATADIR "/kbd-model-map";
-    gchar *localeconfig = NULL;
-    gchar *keyboardconfig = NULL;
-    gchar *xkbdconfig = NULL;
+    gchar *timedateconfig = NULL;
     GFile *pidfile = NULL;
     guint sighup_id = 0;
     guint sigint_id = 0;
@@ -231,7 +228,7 @@ main (gint argc, gchar *argv[])
 
     g_log_set_default_handler (log_handler, NULL);
 
-    option_context = g_option_context_new ("- locale settings D-Bus service");
+    option_context = g_option_context_new ("- timedate settings D-Bus service");
     g_option_context_add_main_entries (option_context, option_entries, NULL);
     if (!g_option_context_parse (option_context, &argc, &argv, &error)) {
         g_critical ("Failed to parse options: %s", error->message);
@@ -244,7 +241,7 @@ main (gint argc, gchar *argv[])
     }
 
     if (config_file == NULL)
-        config_file = SYSCONFDIR "/blocaled.conf";
+        config_file = SYSCONFDIR "/timedated.conf";
     else if (!g_file_test (config_file,
                            G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
         g_critical ("Configuration file not found: %s", config_file);
@@ -258,7 +255,7 @@ main (gint argc, gchar *argv[])
         } else
             g_clear_error (&error);
     } else {
-        localeconfig = g_key_file_get_value (key_file, "settings", "localefile", &error);
+        timedateconfig = g_key_file_get_value (key_file, "settings", "timedatefile", &error);
         if (error != NULL)
             if (error->code == G_KEY_FILE_ERROR_GROUP_NOT_FOUND) {
 
@@ -266,22 +263,9 @@ main (gint argc, gchar *argv[])
                 return 1;
             } else
                 g_clear_error (&error);
-
-        keyboardconfig = g_key_file_get_value (key_file, "settings", "keymapfile", &error);
-        g_clear_error (&error);
-
-        xkbdconfig = g_key_file_get_value (key_file, "settings", "xkbdlayoutfile", &error);
-        g_clear_error (&error);
-        if (localeconfig == NULL &&
-            keyboardconfig == NULL &&
-            xkbdconfig == NULL) {
-            g_critical ("Failed to find a settings file in %s", config_file);
-	    return 1;
         }
     }
-    if (localeconfig == NULL) localeconfig = LOCALECONFIG;
-    if (keyboardconfig == NULL) keyboardconfig = KEYBOARDCONFIG;
-    if (xkbdconfig == NULL) xkbdconfig = XKBDCONFIG;
+    if (timedateconfig == NULL) timedateconfig = TIMEDATECONFIG;
 
     if (!foreground) {
         if (daemon_retval_init () < 0) {
@@ -327,7 +311,7 @@ main (gint argc, gchar *argv[])
     sigterm_id = g_unix_signal_add (SIGTERM,
                                    on_signal,
                                    NULL);
-    localed_init (read_only,
+    timedated _init (read_only,
 		  kbd_model_map,
 		  localeconfig,
 		  keyboardconfig,
@@ -344,7 +328,7 @@ main (gint argc, gchar *argv[])
     g_source_remove (sigint_id);
     g_source_remove (sigterm_id);
 
-    localed_destroy ();
+    timedated _destroy ();
     shell_parser_destroy ();
 
     g_clear_error (&error);
