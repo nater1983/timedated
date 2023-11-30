@@ -311,7 +311,7 @@ main (gint argc, gchar *argv[])
     sigterm_id = g_unix_signal_add (SIGTERM,
                                    on_signal,
                                    NULL);
-    timedated _init (read_only,
+    timedated_init (read_only,
 		  kbd_model_map,
 		  localeconfig,
 		  keyboardconfig,
@@ -328,7 +328,7 @@ main (gint argc, gchar *argv[])
     g_source_remove (sigint_id);
     g_source_remove (sigterm_id);
 
-    timedated _destroy ();
+    timedated_destroy ();
     shell_parser_destroy ();
 
     g_clear_error (&error);
