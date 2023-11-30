@@ -36,12 +36,12 @@
 #include "main.h"
 #include "utils.h"
 
-#define SERVICE_NAME "openrc-settingsd timedated"
+#define SERVICE_NAME "timedated"
 
 static guint bus_id = 0;
 static gboolean read_only = FALSE;
 
-static OpenrcSettingsdTimedatedTimedate1 *timedate1 = NULL;
+static TimedatedTimedate1 *timedate1 = NULL;
 
 static GFile *hwclock_file = NULL;
 static GFile *timezone_file = NULL;
@@ -55,8 +55,8 @@ G_LOCK_DEFINE_STATIC (clock);
 
 gboolean use_ntp = FALSE;
 static const gchar *ntp_preferred_service = NULL;
-static const gchar *ntp_default_services[] = { "ntpd", "chronyd", "busybox-ntpd", NULL };
-#define NTP_DEFAULT_SERVICES_PACKAGES "ntp, openntpd, chrony, busybox-ntpd"
+static const gchar *ntp_default_services[] = { "ntpd", NULL };
+#define NTP_DEFAULT_SERVICES_PACKAGES "ntp"
 G_LOCK_DEFINE_STATIC (ntp);
 
 static gboolean
@@ -170,160 +170,18 @@ set_timezone (const gchar *identifier,
 /* Return the ntp rc service we will use; return value should NOT be freed */
 static const gchar *
 ntp_service ()
-{
-#if HAVE_OPENRC
-    const gchar * const *s = NULL;
-    const gchar *service = NULL;
-    gchar *runlevel = NULL;
-
-    if (ntp_preferred_service != NULL)
-        return ntp_preferred_service;
-
-    runlevel = rc_runlevel_get();
-    for (s = ntp_default_services; *s != NULL; s++) {
-        if (!rc_service_exists (*s))
-            continue;
-        if (service == NULL)
-            service = *s;
-        if (rc_service_in_runlevel (*s, runlevel)) {
-            service = *s;
-            break;
-        }
-    }
-    free (runlevel);
-
-    return service;
-#else
-    return NULL;
-#endif
-}
 
 static gboolean
 service_started (const gchar *service,
                  GError **error)
-{
-#if HAVE_OPENRC
-    RC_SERVICE state;
-
-    g_assert (service != NULL);
-
-    if (!rc_service_exists (service)) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
-        return FALSE;
-    }
-
-    state = rc_service_state (service);
-    return state == RC_SERVICE_STARTED || state == RC_SERVICE_STARTING || state == RC_SERVICE_INACTIVE;
-#else
-    return FALSE;
-#endif
-}
 
 static gboolean
 service_disable (const gchar *service,
                  GError **error)
-{
-#if HAVE_OPENRC
-    gchar *runlevel = NULL;
-    gchar *service_script = NULL;
-    const gchar *argv[3] = { NULL, "stop", NULL };
-    gboolean ret = FALSE;
-    gint exit_status = 0;
-
-    g_assert (service != NULL);
-
-    if (!rc_service_exists (service)) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
-        goto out;
-    }
-
-    runlevel = rc_runlevel_get();
-    if (rc_service_in_runlevel (service, runlevel)) {
-        g_debug ("Removing %s rc service from %s runlevel", service, runlevel);
-        if (!rc_service_delete (runlevel, service))
-            g_warning ("Failed to remove %s rc service from %s runlevel", service, runlevel);
-    }
-
-    if ((service_script = rc_service_resolve (service)) == NULL) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service does not resolve", service);
-        goto out;
-    }
-
-    g_debug ("Stopping %s rc service", service);
-    argv[0] = service_script;
-    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, 0, NULL, NULL, NULL, NULL, &exit_status, error)) {
-        g_prefix_error (error, "Failed to spawn %s rc service:", service);
-        goto out;
-    }
-    if (exit_status) {
-        g_set_error (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED, "%s rc service failed to stop with exit status %d", service, exit_status);
-        goto out;
-    }
-    ret = TRUE;
-
-  out:
-    if (runlevel != NULL)
-        free (runlevel);
-    if (service_script != NULL)
-        free (service_script);
-    return ret;
-#else
-    return FALSE;
-#endif
-}
 
 static gboolean
 service_enable (const gchar *service,
                 GError **error)
-{
-#if HAVE_OPENRC
-    gchar *runlevel = NULL;
-    gchar *service_script = NULL;
-    const gchar *argv[3] = { NULL, "start", NULL };
-    gboolean ret = FALSE;
-    gint exit_status = 0;
-
-    g_assert (service != NULL);
-
-    if (!rc_service_exists (service)) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
-        goto out;
-    }
-
-    runlevel = rc_runlevel_get();
-    if (!rc_service_in_runlevel (service, runlevel)) {
-        g_debug ("Adding %s rc service to %s runlevel", service, runlevel);
-        if (!rc_service_add (runlevel, service))
-            g_warning ("Failed to add %s rc service to %s runlevel", service, runlevel);
-    }
-
-    if ((service_script = rc_service_resolve (service)) == NULL) {
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service does not resolve", service);
-        goto out;
-    }
-
-    g_debug ("Starting %s rc service", service);
-    argv[0] = service_script;
-    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, 0, NULL, NULL, NULL, NULL, &exit_status, error)) {
-        g_prefix_error (error, "Failed to spawn %s rc service:", service);
-        goto out;
-    }
-    if (exit_status) {
-        g_set_error (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED, "%s rc service failed to start with exit status %d", service, exit_status);
-        goto out;
-    }
-    ret = TRUE;
-
-  out:
-    if (runlevel != NULL)
-        free (runlevel);
-    if (service_script != NULL)
-        free (service_script);
-    return ret;
-#else
-    return FALSE;
-#endif
-}
 
 struct invoked_set_time {
     GDBusMethodInvocation *invocation;
@@ -560,9 +418,9 @@ on_handle_set_local_rtc_authorized_cb (GObject *source_object,
         }
     }
 
-    openrc_settingsd_timedated_timedate1_complete_set_timezone (timedate1, data->invocation);
+    timedated_timedate1_complete_set_timezone (timedate1, data->invocation);
     local_rtc = data->local_rtc;
-    openrc_settingsd_timedated_timedate1_set_local_rtc (timedate1, local_rtc);
+    timedated_timedate1_set_local_rtc (timedate1, local_rtc);
 
   unlock:
     G_UNLOCK (clock);
@@ -575,7 +433,7 @@ on_handle_set_local_rtc_authorized_cb (GObject *source_object,
 }
 
 static gboolean
-on_handle_set_local_rtc (OpenrcSettingsdTimedatedTimedate1 *timedate1,
+on_handle_set_local_rtc (TimedatedTimedate1 *timedate1,
                          GDBusMethodInvocation *invocation,
                          const gboolean _local_rtc,
                          const gboolean fix_system,
@@ -631,9 +489,9 @@ on_handle_set_ntp_authorized_cb (GObject *source_object,
         goto unlock;
     }
 
-    openrc_settingsd_timedated_timedate1_complete_set_ntp (timedate1, data->invocation);
+    timedated_timedate1_complete_set_ntp (timedate1, data->invocation);
     use_ntp = data->use_ntp;
-    openrc_settingsd_timedated_timedate1_set_ntp (timedate1, use_ntp);
+    timedated_timedate1_set_ntp (timedate1, use_ntp);
 
   unlock:
     G_UNLOCK (ntp);
@@ -645,7 +503,7 @@ on_handle_set_ntp_authorized_cb (GObject *source_object,
 }
 
 static gboolean
-on_handle_set_ntp (OpenrcSettingsdTimedatedTimedate1 *timedate1,
+on_handle_set_ntp (TimedatedTimedate1 *timedate1,
                    GDBusMethodInvocation *invocation,
                    const gboolean _use_ntp,
                    const gboolean user_interaction,
@@ -676,11 +534,11 @@ on_bus_acquired (GDBusConnection *connection,
 
     g_debug ("Acquired a message bus connection");
 
-    timedate1 = openrc_settingsd_timedated_timedate1_skeleton_new ();
+    timedate1 = timedated_timedate1_skeleton_new ();
 
-    openrc_settingsd_timedated_timedate1_set_timezone (timedate1, timezone_name);
-    openrc_settingsd_timedated_timedate1_set_local_rtc (timedate1, local_rtc);
-    openrc_settingsd_timedated_timedate1_set_ntp (timedate1, use_ntp);
+    timedated_timedate1_set_timezone (timedate1, timezone_name);
+    timedated_timedate1_set_local_rtc (timedate1, local_rtc);
+    timedated_timedate1_set_ntp (timedate1, use_ntp);
 
     g_signal_connect (timedate1, "handle-set-time", G_CALLBACK (on_handle_set_time), NULL);
     g_signal_connect (timedate1, "handle-set-timezone", G_CALLBACK (on_handle_set_timezone), NULL);
@@ -704,7 +562,7 @@ on_name_acquired (GDBusConnection *connection,
                   gpointer         user_data)
 {
     g_debug ("Acquired the name %s", bus_name);
-    openrc_settingsd_component_started ();
+    component_started ();
 }
 
 static void
@@ -716,7 +574,7 @@ on_name_lost (GDBusConnection *connection,
         g_critical ("Failed to acquire a dbus connection");
     else
         g_critical ("Failed to acquire dbus name %s", bus_name);
-    openrc_settingsd_exit (1);
+    exit (1);
 }
 
 void
@@ -728,7 +586,7 @@ timedated_init (gboolean _read_only,
     read_only = _read_only;
     ntp_preferred_service = _ntp_preferred_service;
 
-    hwclock_file = g_file_new_for_path (SYSCONFDIR "/conf.d/hwclock");
+    hwclock_file = g_file_new_for_path (SYSCONFDIR "/hwclock");
     timezone_file = g_file_new_for_path (SYSCONFDIR "/timezone");
     localtime_file = g_file_new_for_path (SYSCONFDIR "/localtime");
 
