@@ -117,8 +117,8 @@ shell_parser_source_var_list (GFile *file,
                               const gchar * const *var_names,
                               GError **error);
 
-void
-shell_parser_init (void);
+/*void
+shell_parser_init (void);*/
 
 void
 shell_parser_destroy (void);
