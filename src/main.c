@@ -183,7 +183,7 @@ timedated_started ()
 
     if (!g_file_replace_contents (pidfile, pidstring, strlen(pidstring), NULL, FALSE, G_FILE_CREATE_NONE, NULL, NULL, &err)) {
         g_critical ("Failed to write " PIDFILE ": %s", err->message);
-        localed_exit (1);
+        timedated_exit (1);
     }
 
     if (!foreground)
