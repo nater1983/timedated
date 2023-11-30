@@ -301,7 +301,7 @@ main (gint argc, gchar *argv[])
     umask (022);
 
     shell_parser_init ();
-    loop = g_main_loop_new (NULL, FALSE);
+    /* loop = g_main_loop_new (NULL, FALSE); */
     sighup_id = g_unix_signal_add (SIGHUP,
                                    on_signal,
                                    NULL);
