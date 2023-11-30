@@ -33,7 +33,7 @@
 #include <glib-unix.h>
 #include <gio/gio.h>
 
-#include "localed.h"
+#include "timedated.h"
 #include "shellparser.h"
 
 #include "config.h"
