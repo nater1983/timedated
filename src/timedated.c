@@ -401,9 +401,9 @@ on_dbus_name_acquired (GDBusConnection *connection,
     bus_id = g_bus_own_name (G_BUS_TYPE_SYSTEM,
                              name,
                              G_BUS_NAME_OWNER_FLAGS_NONE,
-                             on_bus_acquired,
-                             on_name_acquired,
-                             on_name_lost,
+                             on_dbus_bus_acquired,
+                             on_dbus_name_acquired,
+                             on_dbus_name_lost,
                              manager,
                              NULL);
 }
