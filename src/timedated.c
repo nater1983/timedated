@@ -157,309 +157,625 @@ set_localtime_file (const gchar *identifier,
     return TRUE;
 }
 static gboolean
-set_local_rtc (const gchar *identifier,
-               GError **error)
+set_timezone (const gchar *identifier,
+              GError **error)
 {
-    gchar *clock = NULL;
-
-    g_return_val_if_fail (error != NULL, FALSE);
-
-    clock = g_file_read_link (hwclock_file, NULL, error);
-    if (!clock) {
-        g_prefix_error (error, "Unable to read RTC clock symlink:");
-        return FALSE;
+    if (!set_timezone_file (identifier, error)) {
+        g_autofree gchar *timezone_filename = g_file_get_path (timezone_file);
+        g_debug ("Error setting %s: %s", timezone_filename, (*error)->message);
+        g_clear_error (error);
     }
-
-    if (g_strcmp0 (clock, identifier) == 0)
-        return TRUE;
-
-    if (!g_file_delete (hwclock_file, NULL, error)) {
-        g_prefix_error (error, "Unable to delete file to make new symlink %s:", g_file_get_path (hwclock_file));
+    if (!set_localtime_file (identifier, error))
         return FALSE;
-    }
-    if (!g_file_make_symbolic_link (hwclock_file, identifier, NULL, error)) {
-        g_prefix_error (error, "Unable to create symlink %s -> %s:", g_file_get_path (hwclock_file), identifier);
-        return FALSE;
-    }
 
     return TRUE;
 }
 
-static gboolean
-check_hwclock (void)
+/* Return the ntp rc service we will use; return value should NOT be freed */
+static const gchar *
+ntp_service ()
 {
-    gboolean is_local_rtc;
-    gchar *rtc_identifier = NULL;
-    gboolean is_local_rtc_systemd;
-
-    G_LOCK (clock);
-    is_local_rtc = get_local_rtc (NULL);
-    rtc_identifier = get_timezone_name (NULL);
-    G_UNLOCK (clock);
-
-    is_local_rtc_systemd = is_local_rtc;
-
-    if (is_local_rtc) {
-        gboolean ret;
-        G_LOCK (clock);
-        ret = set_local_rtc (rtc_identifier, NULL);
-        G_UNLOCK (clock);
-        if (!ret)
-            is_local_rtc_systemd = FALSE;
-    }
-
-    return is_local_rtc_systemd;
-}
-
-static gboolean
-check_hardware (void)
-{
-    gboolean check;
-    g_autofree gchar *rtcname = NULL;
-
-    if (!g_file_test ("/dev/rtc", G_FILE_TEST_EXISTS))
-        return FALSE;
-
-    G_LOCK (clock);
-    rtcname = shell_source_var (hwclock_file, "${rtc}", NULL);
-    G_UNLOCK (clock);
-
-    if (rtcname && g_strcmp0 (rtcname, "/dev/rtc") == 0)
-        check = TRUE;
-    else
-        check = FALSE;
-
-    return check;
-}
-
 #if HAVE_OPENRC
-static gboolean
-read_openrc_hwclock (void)
-{
-    g_autofree gchar *hwclock_value = NULL;
+    const gchar * const *s = NULL;
+    const gchar *service = NULL;
+    gchar *runlevel = NULL;
 
-    hwclock_value = rc_conf_value (NULL, NULL, "clock");
-    if (hwclock_value && g_ascii_strcasecmp (hwclock_value, "localtime") == 0)
-        return TRUE;
+    if (ntp_preferred_service != NULL)
+        return ntp_preferred_service;
 
-    return FALSE;
-}
+    runlevel = rc_runlevel_get();
+    for (s = ntp_default_services; *s != NULL; s++) {
+        if (!rc_service_exists (*s))
+            continue;
+        if (service == NULL)
+            service = *s;
+        if (rc_service_in_runlevel (*s, runlevel)) {
+            service = *s;
+            break;
+        }
+    }
+    free (runlevel);
+
+    return service;
+#else
+    return NULL;
 #endif
-
-static gboolean
-check_hwclock_from_proc_cmdline (void)
-{
-    gboolean check;
-    g_autofree gchar *cmdline = NULL;
-    g_autofree gchar **tokens = NULL;
-    gchar **iter;
-
-    cmdline = g_file_get_contents ("/proc/cmdline", NULL, NULL);
-    if (!cmdline)
-        return FALSE;
-
-    tokens = g_strsplit_set (cmdline, " \t", -1);
-    for (iter = tokens; iter && *iter; iter++) {
-        gchar *token = *iter;
-        gchar **param = g_strsplit (token, "=", 2);
-        if (param && g_strv_length (param) == 2) {
-            if (g_strcmp0 (param[0], "rtc") == 0 && g_strcmp0 (param[1], "local") == 0) {
-                check = TRUE;
-                g_strfreev (param);
-                break;
-            }
-        }
-        g_strfreev (param);
-    }
-
-    g_strfreev (tokens);
-
-    return check;
 }
 
 static gboolean
-check_hwclock_from_proc_cmdline_initrd (void)
-{
-    gboolean check;
-    g_autofree gchar *cmdline = NULL;
-    g_autofree gchar **tokens = NULL;
-    gchar **iter;
-
-    cmdline = g_file_get_contents ("/proc/cmdline", NULL, NULL);
-    if (!cmdline)
-        return FALSE;
-
-    tokens = g_strsplit_set (cmdline, " \t", -1);
-    for (iter = tokens; iter && *iter; iter++) {
-        gchar *token = *iter;
-        gchar **param = g_strsplit (token, "=", 2);
-        if (param && g_strv_length (param) == 2) {
-            if (g_strcmp0 (param[0], "rd.rtc") == 0 && g_strcmp0 (param[1], "local") == 0) {
-                check = TRUE;
-                g_strfreev (param);
-                break;
-            }
-        }
-        g_strfreev (param);
-    }
-
-    g_strfreev (tokens);
-
-    return check;
-}
-
-static gboolean
-get_ntp_servers (const gchar *service,
-                 GStrv *servers,
+service_started (const gchar *service,
                  GError **error)
 {
-    g_autoptr(GKeyFile) keyfile = NULL;
-    g_autoptr(GFile) file = NULL;
-    g_autofree gchar *ntp_conf = NULL;
+#if HAVE_OPENRC
+    RC_SERVICE state;
 
-    file = g_file_new_for_path ("/etc/ntp.conf");
-    if (!g_file_query_exists (file, NULL)) {
-        *servers = g_strdupv (ntp_default_services);
-        return TRUE;
-    }
+    g_assert (service != NULL);
 
-    ntp_conf = g_file_get_path (file);
-    keyfile = g_key_file_new ();
-    if (!g_key_file_load_from_file (keyfile, ntp_conf, G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS, error)) {
-        g_prefix_error (error, "Failed to load NTP configuration from '%s':", ntp_conf);
+    if (!rc_service_exists (service)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
         return FALSE;
     }
 
-    *servers = g_key_file_get_string_list (keyfile, service, "servers", NULL, NULL);
+    state = rc_service_state (service);
+    return state == RC_SERVICE_STARTED || state == RC_SERVICE_STARTING || state == RC_SERVICE_INACTIVE;
+#else
+    return FALSE;
+#endif
+}
+
+static gboolean
+service_disable (const gchar *service,
+                 GError **error)
+{
+#if HAVE_OPENRC
+    gchar *runlevel = NULL;
+    gchar *service_script = NULL;
+    const gchar *argv[3] = { NULL, "stop", NULL };
+    gboolean ret = FALSE;
+    gint exit_status = 0;
+
+    g_assert (service != NULL);
+
+    if (!rc_service_exists (service)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
+        goto out;
+    }
+
+    runlevel = rc_runlevel_get();
+    if (rc_service_in_runlevel (service, runlevel)) {
+        g_debug ("Removing %s rc service from %s runlevel", service, runlevel);
+        if (!rc_service_delete (runlevel, service))
+            g_warning ("Failed to remove %s rc service from %s runlevel", service, runlevel);
+    }
+
+    if ((service_script = rc_service_resolve (service)) == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service does not resolve", service);
+        goto out;
+    }
+
+    g_debug ("Stopping %s rc service", service);
+    argv[0] = service_script;
+    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, 0, NULL, NULL, NULL, NULL, &exit_status, error)) {
+        g_prefix_error (error, "Failed to spawn %s rc service:", service);
+        goto out;
+    }
+    if (exit_status) {
+        g_set_error (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED, "%s rc service failed to stop with exit status %d", service, exit_status);
+        goto out;
+    }
+    ret = TRUE;
+
+  out:
+    if (runlevel != NULL)
+        free (runlevel);
+    if (service_script != NULL)
+        free (service_script);
+    return ret;
+#else
+    return FALSE;
+#endif
+}
+
+static gboolean
+service_enable (const gchar *service,
+                GError **error)
+{
+#if HAVE_OPENRC
+    gchar *runlevel = NULL;
+    gchar *service_script = NULL;
+    const gchar *argv[3] = { NULL, "start", NULL };
+    gboolean ret = FALSE;
+    gint exit_status = 0;
+
+    g_assert (service != NULL);
+
+    if (!rc_service_exists (service)) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service not found", service);
+        goto out;
+    }
+
+    runlevel = rc_runlevel_get();
+    if (!rc_service_in_runlevel (service, runlevel)) {
+        g_debug ("Adding %s rc service to %s runlevel", service, runlevel);
+        if (!rc_service_add (runlevel, service))
+            g_warning ("Failed to add %s rc service to %s runlevel", service, runlevel);
+    }
+
+    if ((service_script = rc_service_resolve (service)) == NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "%s rc service does not resolve", service);
+        goto out;
+    }
+
+    g_debug ("Starting %s rc service", service);
+    argv[0] = service_script;
+    if (!g_spawn_sync (NULL, (gchar **)argv, NULL, 0, NULL, NULL, NULL, NULL, &exit_status, error)) {
+        g_prefix_error (error, "Failed to spawn %s rc service:", service);
+        goto out;
+    }
+    if (exit_status) {
+        g_set_error (error, G_SPAWN_ERROR, G_SPAWN_ERROR_FAILED, "%s rc service failed to start with exit status %d", service, exit_status);
+        goto out;
+    }
+    ret = TRUE;
+
+  out:
+    if (runlevel != NULL)
+        free (runlevel);
+    if (service_script != NULL)
+        free (service_script);
+    return ret;
+#else
+    return FALSE;
+#endif
+}
+
+struct invoked_set_time {
+    GDBusMethodInvocation *invocation;
+    gint64 usec_utc;
+    gboolean relative;
+};
+
+static void
+on_handle_set_time_authorized_cb (GObject *source_object,
+                                  GAsyncResult *res,
+                                  gpointer user_data)
+{
+    GError *err = NULL;
+    struct invoked_set_time *data;
+    struct timespec ts = { 0, 0 };
+    struct tm *tm = NULL;
+
+    data = (struct invoked_set_time *) user_data;
+    if (!check_polkit_finish (res, &err)) {
+        g_dbus_method_invocation_return_gerror (data->invocation, err);
+        goto out;
+    }
+
+    G_LOCK (clock);
+    if (!data->relative && data->usec_utc < 0) {
+        g_dbus_method_invocation_return_dbus_error (data->invocation, DBUS_ERROR_INVALID_ARGS, "Attempt to set time before epoch");
+        goto unlock;
+    }
+
+    if (data->relative)
+        if (clock_gettime (CLOCK_REALTIME, &ts)) {
+            int errsv = errno;
+            g_dbus_method_invocation_return_dbus_error (data->invocation, DBUS_ERROR_FAILED, strerror (errsv));
+            goto unlock;
+        }
+    ts.tv_sec += data->usec_utc / 1000000;
+    ts.tv_nsec += (data->usec_utc % 1000000) * 1000;
+    if (clock_settime (CLOCK_REALTIME, &ts)) {
+        int errsv = errno;
+        g_dbus_method_invocation_return_dbus_error (data->invocation, DBUS_ERROR_FAILED, strerror (errsv));
+        goto unlock;
+    }
+
+    if (local_rtc)
+        tm = localtime(&ts.tv_sec);
+    else
+        tm = gmtime(&ts.tv_sec);
+    hwclock_set_time(tm);
+
+    timedated_timedate1_complete_set_time (timedate1, data->invocation);
+
+  unlock:
+    G_UNLOCK (clock);
+
+  out:
+    g_free (data);
+    if (err != NULL)
+        g_error_free (err);
+}
+
+static gboolean
+on_handle_set_time (TimedatedTimedate1 *timedate1,
+                    GDBusMethodInvocation *invocation,
+                    const gint64 usec_utc,
+                    const gboolean relative,
+                    const gboolean user_interaction,
+                    gpointer user_data)
+{
+    if (read_only)
+        g_dbus_method_invocation_return_dbus_error (invocation,
+                                                    DBUS_ERROR_NOT_SUPPORTED,
+                                                    SERVICE_NAME " is in read-only mode");
+    else {
+        struct invoked_set_time *data;
+        data = g_new0 (struct invoked_set_time, 1);
+        data->invocation = invocation;
+        data->usec_utc = usec_utc;
+        data->relative = relative;
+        check_polkit_async (g_dbus_method_invocation_get_sender (invocation), "org.freedesktop.timedate1.set-time", user_interaction, on_handle_set_time_authorized_cb, data);
+    }
+
     return TRUE;
 }
 
-static gboolean
-set_ntp (void)
+struct invoked_set_timezone {
+    GDBusMethodInvocation *invocation;
+    gchar *timezone; /* newly allocated */
+};
+
+static void
+on_handle_set_timezone_authorized_cb (GObject *source_object,
+                                      GAsyncResult *res,
+                                      gpointer user_data)
 {
-    gboolean ok = FALSE;
-    GStrv servers = NULL;
-    g_autofree gchar *chosen_service = NULL;
+    GError *err = NULL;
+    struct invoked_set_timezone *data;
 
-    G_LOCK (ntp);
-
-    if (!use_ntp) {
-        ok = TRUE;
+    data = (struct invoked_set_timezone *) user_data;
+    if (!check_polkit_finish (res, &err)) {
+        g_dbus_method_invocation_return_gerror (data->invocation, err);
         goto out;
     }
 
-    if (ntp_preferred_service)
-        chosen_service = g_strdup (ntp_preferred_service);
-    else
-        chosen_service = g_strdupv (ntp_default_services)[0];
-
-    if (!get_ntp_servers (chosen_service, &servers, NULL))
-        goto out;
-
-    if (g_strv_length (servers) > 0) {
-        ok = TRUE;
-    } else {
-        use_ntp = FALSE;
+    G_LOCK (clock);
+    if (!set_timezone(data->timezone, &err)) {
+        g_dbus_method_invocation_return_gerror (data->invocation, err);
+        goto unlock;
     }
 
-out:
-    G_UNLOCK (ntp);
-    g_strfreev (servers);
+    if (local_rtc) {
+        struct timespec ts;
+        struct tm *tm;
 
-    return ok;
+        /* Update kernel's view of the rtc timezone */
+        hwclock_apply_localtime_delta (NULL);
+        clock_gettime (CLOCK_REALTIME, &ts);
+        tm = localtime (&ts.tv_sec);
+        hwclock_set_time (tm);
+    }
+
+    timedated_timedate1_complete_set_timezone (timedate1, data->invocation);
+    g_free (timezone_name);
+    timezone_name = data->timezone;
+    timedated_timedate1_set_timezone (timedate1, timezone_name);
+
+  unlock:
+    G_UNLOCK (clock);
+
+  out:
+    g_free (data);
+    if (err != NULL)
+        g_error_free (err);
 }
 
 static gboolean
-write_hwclock (void)
+on_handle_set_timezone (TimedatedTimedate1 *timedate1,
+                        GDBusMethodInvocation *invocation,
+                        const gchar *timezone,
+                        const gboolean user_interaction,
+                        gpointer user_data)
 {
-    gboolean ok = TRUE;
-    gboolean ret;
-    g_autofree gchar *tz = NULL;
-
-    G_LOCK (clock);
-    tz = get_timezone_name (NULL);
-    G_UNLOCK (clock);
-
-    if (local_rtc) {
-        G_LOCK (clock);
-        ret = set_local_rtc (tz, NULL);
-        G_UNLOCK (clock);
-        if (!ret)
-            ok = FALSE;
+    if (read_only)
+        g_dbus_method_invocation_return_dbus_error (invocation,
+                                                    DBUS_ERROR_NOT_SUPPORTED,
+                                                    SERVICE_NAME " is in read-only mode");
+    else {
+        struct invoked_set_timezone *data;
+        data = g_new0 (struct invoked_set_timezone, 1);
+        data->invocation = invocation;
+        data->timezone = g_strdup (timezone);
+        check_polkit_async (g_dbus_method_invocation_get_sender (invocation), "org.freedesktop.timedate1.set-timezone", user_interaction, on_handle_set_timezone_authorized_cb, data);
     }
 
-    return ok;
+    return TRUE;
+}
+
+struct invoked_set_local_rtc {
+    GDBusMethodInvocation *invocation;
+    gboolean local_rtc;
+    gboolean fix_system;
+};
+
+static void
+on_handle_set_local_rtc_authorized_cb (GObject *source_object,
+                                       GAsyncResult *res,
+                                       gpointer user_data)
+{
+    GError *err = NULL;
+    struct invoked_set_local_rtc *data;
+    gchar *clock = NULL;
+    const gchar *clock_types[2] = { "UTC", "local" };
+
+    data = (struct invoked_set_local_rtc *) user_data;
+    if (!check_polkit_finish (res, &err)) {
+        g_dbus_method_invocation_return_gerror (data->invocation, err);
+        goto out;
+    }
+
+    G_LOCK (clock);
+    clock = shell_source_var (hwclock_file, "${clock}", NULL);
+    if (clock != NULL || data->local_rtc)
+        if (!shell_parser_set_and_save (hwclock_file, &err, "clock", NULL, clock_types[data->local_rtc], NULL)) {
+            g_dbus_method_invocation_return_gerror (data->invocation, err);
+            goto unlock;
+        }
+
+    if (data->local_rtc != local_rtc) {
+        /* The clock sync code below taken almost verbatim from systemd's timedated.c, and is
+         * copyright 2011 Lennart Poettering */
+        struct timespec ts;
+
+        /* Update kernel's view of the rtc timezone */
+        if (data->local_rtc)
+            hwclock_apply_localtime_delta (NULL);
+        else
+            hwclock_reset_localtime_delta ();
+
+        clock_gettime (CLOCK_REALTIME, &ts);
+        if (data->fix_system) {
+            struct tm tm;
+
+            /* Sync system clock from RTC; first,
+             * initialize the timezone fields of
+             * struct tm. */
+            if (data->local_rtc)
+                tm = *localtime(&ts.tv_sec);
+            else
+                tm = *gmtime(&ts.tv_sec);
+
+            /* Override the main fields of
+             * struct tm, but not the timezone
+             * fields */
+            if (hwclock_get_time(&tm) >= 0) {
+                /* And set the system clock
+                 * with this */
+                if (data->local_rtc)
+                    ts.tv_sec = mktime(&tm);
+                else
+                    ts.tv_sec = timegm(&tm);
+
+                clock_settime(CLOCK_REALTIME, &ts);
+            }
+
+        } else {
+            struct tm *tm;
+
+            /* Sync RTC from system clock */
+            if (data->local_rtc)
+                tm = localtime(&ts.tv_sec);
+            else
+                tm = gmtime(&ts.tv_sec);
+
+            hwclock_set_time(tm);
+        }
+    }
+
+    timedated_timedate1_complete_set_timezone (timedate1, data->invocation);
+    local_rtc = data->local_rtc;
+    timedated_timedate1_set_local_rtc (timedate1, local_rtc);
+
+  unlock:
+    G_UNLOCK (clock);
+
+  out:
+    g_free (clock);
+    g_free (data);
+    if (err != NULL)
+        g_error_free (err);
+}
+
+static gboolean
+on_handle_set_local_rtc (TimedatedTimedate1 *timedate1,
+                         GDBusMethodInvocation *invocation,
+                         const gboolean _local_rtc,
+                         const gboolean fix_system,
+                         const gboolean user_interaction,
+                         gpointer user_data)
+{
+    if (read_only)
+        g_dbus_method_invocation_return_dbus_error (invocation,
+                                                    DBUS_ERROR_NOT_SUPPORTED,
+                                                    SERVICE_NAME " is in read-only mode");
+    else {
+        struct invoked_set_local_rtc *data;
+        data = g_new0 (struct invoked_set_local_rtc, 1);
+        data->invocation = invocation;
+        data->local_rtc = _local_rtc;
+        data->fix_system = fix_system;
+        check_polkit_async (g_dbus_method_invocation_get_sender (invocation), "org.freedesktop.timedate1.set-local-rtc", user_interaction, on_handle_set_local_rtc_authorized_cb, data);
+    }
+
+    return TRUE;
+}
+
+struct invoked_set_ntp {
+    GDBusMethodInvocation *invocation;
+    gboolean use_ntp;
+};
+
+static void
+on_handle_set_ntp_authorized_cb (GObject *source_object,
+                                 GAsyncResult *res,
+                                 gpointer user_data)
+{
+    GError *err = NULL;
+    struct invoked_set_ntp *data;
+
+    data = (struct invoked_set_ntp *) user_data;
+    if (!check_polkit_finish (res, &err)) {
+        g_dbus_method_invocation_return_gerror (data->invocation, err);
+        goto out;
+    }
+
+    G_LOCK (ntp);
+    if (ntp_service () == NULL) {
+        g_dbus_method_invocation_return_dbus_error (data->invocation, DBUS_ERROR_FAILED,
+                                                    "No ntp implementation found. Please install one of the following packages: "
+                                                    NTP_DEFAULT_SERVICES_PACKAGES);
+        goto unlock;
+    }
+    if ((data->use_ntp && !service_enable (ntp_service (), &err)) ||
+        (!data->use_ntp && !service_disable (ntp_service (), &err)))
+    {
+        g_dbus_method_invocation_return_gerror (data->invocation, err);
+        goto unlock;
+    }
+
+    timedated_timedate1_complete_set_ntp (timedate1, data->invocation);
+    use_ntp = data->use_ntp;
+    timedated_timedate1_set_ntp (timedate1, use_ntp);
+
+  unlock:
+    G_UNLOCK (ntp);
+
+  out:
+    g_free (data);
+    if (err != NULL)
+        g_error_free (err);
+}
+
+static gboolean
+on_handle_set_ntp (TimedatedTimedate1 *timedate1,
+                   GDBusMethodInvocation *invocation,
+                   const gboolean _use_ntp,
+                   const gboolean user_interaction,
+                   gpointer user_data)
+{
+    if (read_only)
+        g_dbus_method_invocation_return_dbus_error (invocation,
+                                                    DBUS_ERROR_NOT_SUPPORTED,
+                                                    SERVICE_NAME " is in read-only mode");
+    else {
+        struct invoked_set_ntp *data;
+        data = g_new0 (struct invoked_set_ntp, 1);
+        data->invocation = invocation;
+        data->use_ntp = _use_ntp;
+        check_polkit_async (g_dbus_method_invocation_get_sender (invocation), "org.freedesktop.timedate1.set-ntp", user_interaction, on_handle_set_ntp_authorized_cb, data);
+    }
+
+    return TRUE;
 }
 
 static void
-on_dbus_name_acquired (GDBusConnection *connection,
-                       const gchar *name,
-                       gpointer user_data)
+on_bus_acquired (GDBusConnection *connection,
+                 const gchar     *bus_name,
+                 gpointer         user_data)
 {
-    GDBusObjectManagerServer *manager = user_data;
+    gchar *name;
+    GError *err = NULL;
+
+    g_debug ("Acquired a message bus connection");
+
+    timedate1 = timedated_timedate1_skeleton_new ();
+
+    timedated_timedate1_set_timezone (timedate1, timezone_name);
+    timedated_timedate1_set_local_rtc (timedate1, local_rtc);
+    timedated_timedate1_set_ntp (timedate1, use_ntp);
+
+    g_signal_connect (timedate1, "handle-set-time", G_CALLBACK (on_handle_set_time), NULL);
+    g_signal_connect (timedate1, "handle-set-timezone", G_CALLBACK (on_handle_set_timezone), NULL);
+    g_signal_connect (timedate1, "handle-set-local-rtc", G_CALLBACK (on_handle_set_local_rtc), NULL);
+    g_signal_connect (timedate1, "handle-set-ntp", G_CALLBACK (on_handle_set_ntp), NULL);
+
+    if (!g_dbus_interface_skeleton_export (G_DBUS_INTERFACE_SKELETON (timedate1),
+                                           connection,
+                                           "/org/freedesktop/timedate1",
+                                           &err)) {
+        if (err != NULL) {
+            g_critical ("Failed to export interface on /org/freedesktop/timedate1: %s", err->message);
+            exit (1);
+        }
+    }
+}
+
+static void
+on_name_acquired (GDBusConnection *connection,
+                  const gchar     *bus_name,
+                  gpointer         user_data)
+{
+    g_debug ("Acquired the name %s", bus_name);
+    component_started ();
+}
+
+static void
+on_name_lost (GDBusConnection *connection,
+              const gchar     *bus_name,
+              gpointer         user_data)
+{
+    if (connection == NULL)
+        g_critical ("Failed to acquire a dbus connection");
+    else
+        g_critical ("Failed to acquire dbus name %s", bus_name);
+    exit (1);
+}
+
+void
+timedated_init (gboolean _read_only,
+                const gchar *_ntp_preferred_service)
+{
+    GError *err = NULL;
+
+    read_only = _read_only;
+    ntp_preferred_service = _ntp_preferred_service;
+
+    hwclock_file = g_file_new_for_path (SYSCONFDIR "/conf.d/hwclock");
+    timezone_file = g_file_new_for_path (SYSCONFDIR "/timezone");
+    localtime_file = g_file_new_for_path (SYSCONFDIR "/localtime");
+
+    local_rtc = get_local_rtc (&err);
+    if (err != NULL) {
+        g_debug ("%s", err->message);
+        g_clear_error (&err);
+    }
+    timezone_name = get_timezone_name (&err);
+    if (err != NULL) {
+        g_warning ("%s", err->message);
+        g_clear_error (&err);
+    }
+    if (ntp_service () == NULL) {
+        g_warning ("No ntp implementation found. Please install one of the following packages: " NTP_DEFAULT_SERVICES_PACKAGES);
+        use_ntp = FALSE;
+    } else {
+        use_ntp = service_started (ntp_service (), &err);
+        if (err != NULL) {
+            g_warning ("%s", err->message);
+            g_clear_error (&err);
+        }
+    }
 
     bus_id = g_bus_own_name (G_BUS_TYPE_SYSTEM,
-                             name,
+                             "org.freedesktop.timedate1",
                              G_BUS_NAME_OWNER_FLAGS_NONE,
-                             on_dbus_name_acquired,
-                             on_dbus_name_lost,
-                             manager,
+                             on_bus_acquired,
+                             on_name_acquired,
+                             on_name_lost,
+                             NULL,
                              NULL);
 }
 
-static void
-on_dbus_name_lost (GDBusConnection *connection,
-                   const gchar *name,
-                   gpointer user_data)
+void
+timedated_destroy (void)
 {
-    /* Lost the name on the bus. Quit. */
-    g_main_loop_quit (user_data);
-}
+    g_bus_unown_name (bus_id);
+    bus_id = 0;
+    read_only = FALSE;
+    ntp_preferred_service = NULL;
 
-int
-main (int argc, char *argv[])
-{
-    g_autoptr(GOptionContext) context = NULL;
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GMainLoop) loop = NULL;
-    g_autoptr(GDBusObjectManagerServer) manager = NULL;
-    g_autoptr(GDBusConnection) connection = NULL;
-    gint ret = EXIT_FAILURE;
-
-    context = g_option_context_new ("- timedated");
-    g_option_context_add_group (context, g_irepository_get_option_group (g_date_get_type ()));
-    if (!g_option_context_parse (context, &argc, &argv, &error)) {
-        g_printerr ("Error parsing command line arguments: %s\n", error->message);
-        return EXIT_FAILURE;
-    }
-
-    loop = g_main_loop_new (NULL, FALSE);
-
-    manager = g_dbus_object_manager_server_new (MANAGER_PATH);
-    g_dbus_object_manager_server_set_connection (manager, NULL);
-
-    connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, &error);
-    if (!connection) {
-        g_printerr ("Error connecting to D-Bus: %s\n", error->message);
-        return EXIT_FAILURE;
-    }
-
-    bus_id = g_bus_own_name_on_connection (connection,
-                                           SERVICE_NAME,
-                                           G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT |
-                                           G_BUS_NAME_OWNER_FLAGS_REPLACE_EXISTING,
-                                           on_dbus_name_acquired,
-                                           on_dbus_name_lost,
-                                           manager,
-                                           NULL,
-                                           NULL);
-
-    g_main_loop_run (loop);
-
-    if (bus_id > 0) {
-        g_bus_unown_name (bus_id);
-        bus_id = 0;
-    }
-
-    return ret;
+    g_object_unref (hwclock_file);
+    g_object_unref (timezone_file);
+    g_object_unref (localtime_file);
 }
